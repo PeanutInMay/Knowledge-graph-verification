@@ -223,9 +223,119 @@ class HallucinationVerifier:
         
         return agent1_result, agent2_result, agent3_result
 
-# 创建Gradio界面
 def create_gradio_interface():
     verifier = HallucinationVerifier()
+    
+    # 自定义CSS样式
+    custom_css = """
+    .container {
+        max-width: 1000px;
+        margin: auto;
+    }
+    .title {
+        text-align: center;
+        color: #1a5276;
+        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        font-size: 2.5em;
+        font-weight: bold;
+        margin-bottom: 12px;  /* 从25px减小到12px */
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        background: linear-gradient(to right, #2980b9, #3498db);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        padding: 10px 0 5px 0;  /* 减少底部内边距 */
+        border-bottom: 2px solid #e8f4fc;
+    }
+    .subtitle {
+        text-align: center;
+        color: #34495E;
+        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        font-size: 1.1em;  /* 稍微减小字体 */
+        margin-bottom: 10px;  /* 从20px减小到10px */
+        font-style: italic;
+        letter-spacing: 0.5px;
+        line-height: 1.2;  /* 从1.4减小到1.2 */
+    }
+    .input-container, .output-container {
+        padding: 18px;
+        border-radius: 10px;
+        transition: all 0.3s ease;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        margin-bottom: 16px;
+        position: relative;
+        overflow: hidden;
+    }
+    .input-container {
+        background: linear-gradient(to bottom right, #f9fafc, #f4f7fa);
+        border: 1px solid #e1e8ed;
+    }
+    .input-container:before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: linear-gradient(to bottom, #3498db, #2980b9);
+    }
+    .output-container {
+        background: linear-gradient(to bottom right, #f0f5fa, #e8f0f8);
+        border: 1px solid #d8e2ef;
+    }
+    .output-container:before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: linear-gradient(to bottom, #27ae60, #1e8449);
+    }
+    .input-container:hover, .output-container:hover {
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+    }
+    .input-container h3, .output-container h3 {
+        color: #2c3e50;
+        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        margin-bottom: 15px;
+        font-weight: 600;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(0,0,0,0.05);
+    }
+    .verify-button {
+        background-color: #3498db;
+        color: white;
+        border: none;
+        padding: 12px 20px;
+        border-radius: 5px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .verify-button:hover {
+        background-color: #2980b9;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+    .agent-output {
+        font-family: 'Consolas', 'Source Code Pro', monospace;
+        border-left: 3px solid #3498db;
+        padding-left: 10px;
+    }
+    .result-highlight {
+        background-color: #e8f4fc;
+        border-left: 3px solid #27ae60;
+        padding: 10px;
+        border-radius: 5px;
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    .fade-in {
+        animation: fadeIn 0.5s ease-in-out;
+    }
+    """
     
     def process_verification(head_entity, relation, tail_entity):
         triple = (head_entity, relation, tail_entity)
@@ -246,53 +356,91 @@ def create_gradio_interface():
             corrected_relation = relation
             corrected_tail = tail_entity
         
+        # 添加简单的延迟以显示加载效果
+        import time
+        time.sleep(0.5)
+        
         return agent1_str, agent2_str, agent3_str, corrected_head, corrected_relation, corrected_tail
     
-    with gr.Blocks(title="三元组幻觉实体校验系统") as demo:
-        gr.Markdown("# 三元组幻觉实体校验系统")
-        gr.Markdown("输入一个三元组(头实体, 关系, 尾实体)，系统将使用多个LLM智能体进行校验，检测并修正幻觉实体。")
+    # 创建一个加载指示动画的函数
+    def show_loading():
+        return ["处理中...", "处理中...", "处理中...", "", "", ""]
+    
+    with gr.Blocks(title="多智能体校验系统", css=custom_css, theme=gr.themes.Soft()) as demo:
+        with gr.Row(elem_classes="container"):
+            with gr.Column():
+                gr.Markdown("# 多智能体校验系统", elem_classes="title")
+                gr.Markdown("输入一个三元组(头实体, 关系, 尾实体)，系统将使用多个智能体进行校验。", elem_classes="subtitle")
+                
+                with gr.Group(elem_classes="input-container fade-in"):
+                    gr.Markdown(" ### 输入三元组")
+                    with gr.Row():
+                        head_entity = gr.Textbox(label="头实体", placeholder="例如：爱因斯坦")
+                        relation = gr.Textbox(label="关系", placeholder="例如：发明了")
+                        tail_entity = gr.Textbox(label="尾实体", placeholder="例如：相对论")
+                    
+                    verify_button = gr.Button("开始校验", elem_classes="verify-button")
+                
+                with gr.Group(elem_classes="output-container fade-in"):
+                    gr.Markdown(" ### 修正结果")
+                    with gr.Row():
+                        corrected_head = gr.Textbox(label="修正后的头实体", elem_classes="result-highlight")
+                        corrected_relation = gr.Textbox(label="修正后的关系", elem_classes="result-highlight")
+                        corrected_tail = gr.Textbox(label="修正后的尾实体", elem_classes="result-highlight")
+                
+                with gr.Accordion("校验过程详情", open=False, elem_classes="fade-in"):
+                    with gr.Tab("智能体1: 初步验证"):
+                        agent1_output = gr.JSON(elem_classes="agent-output")
+                    with gr.Tab("智能体2: 事实核查"):
+                        agent2_output = gr.JSON(elem_classes="agent-output")
+                    with gr.Tab("智能体3: 最终判断"):
+                        agent3_output = gr.JSON(elem_classes="agent-output")
+                
+                with gr.Accordion("使用说明", open=False, elem_classes="fade-in"):
+                    gr.Markdown("""
+                    ### 使用说明
+                    1. 在上方输入框中填写三元组的头实体、关系和尾实体
+                    2. 点击"开始校验"按钮
+                    3. 系统将依次调用三个智能体进行校验
+                    4. 修正结果区域将显示修正后的三元组
+                    5. 校验过程详情可展开查看详细的校验过程
+                    
+                    ### 示例输入
+                    
+                    **示例1：**
+                    - 头实体: "爱因斯坦"
+                    - 关系: "发明了"
+                    - 尾实体: "相对论"
+                    
+                    **示例2：**
+                    - 头实体: "拿破仑"
+                    - 关系: "发明了"
+                    - 尾实体: "蒸汽机"
+                    """)
         
-        with gr.Row():
-            with gr.Column(scale=1):
-                head_entity = gr.Textbox(label="头实体")
-                relation = gr.Textbox(label="关系")
-                tail_entity = gr.Textbox(label="尾实体")
-                verify_button = gr.Button("开始校验")
-            
-            with gr.Column(scale=1):
-                corrected_head = gr.Textbox(label="修正后的头实体")
-                corrected_relation = gr.Textbox(label="修正后的关系")
-                corrected_tail = gr.Textbox(label="修正后的尾实体")
-        
-        with gr.Accordion("校验过程详情", open=True):
-            agent1_output = gr.TextArea(label="智能体1: 初步验证", lines=10)
-            agent2_output = gr.TextArea(label="智能体2: 事实核查", lines=10)
-            agent3_output = gr.TextArea(label="智能体3: 最终判断", lines=10)
-            
-        verify_button.click(
+        # 设置按钮点击事件，添加加载动画效果
+        loading_event = verify_button.click(
+            fn=show_loading,
+            outputs=[agent1_output, agent2_output, agent3_output, 
+                     corrected_head, corrected_relation, corrected_tail]
+        )
+        loading_event.then(
             fn=process_verification,
             inputs=[head_entity, relation, tail_entity],
             outputs=[agent1_output, agent2_output, agent3_output, 
                      corrected_head, corrected_relation, corrected_tail]
         )
         
-        gr.Markdown("""
-        ## 使用说明
-        1. 在左侧输入框中填写三元组的头实体、关系和尾实体
-        2. 点击"开始校验"按钮
-        3. 系统将依次调用三个智能体进行校验
-        4. 右侧将显示修正后的三元组
-        5. 下方可展开查看详细的校验过程
-        
-        ## 示例输入
-        - 头实体: "爱因斯坦"
-        - 关系: "发明了"
-        - 尾实体: "相对论"
-        
-        - 头实体: "拿破仑"
-        - 关系: "发明了"
-        - 尾实体: "蒸汽机"
-        """)
+        # 添加示例
+        gr.Examples(
+            examples=[
+                ["爱因斯坦", "发明了", "相对论"],
+                ["拿破仑", "发明了", "蒸汽机"],
+                ["马云", "创立了", "阿里巴巴"],
+                ["关羽", "是", "三国演义的角色"]
+            ],
+            inputs=[head_entity, relation, tail_entity]
+        )
     
     return demo
 
