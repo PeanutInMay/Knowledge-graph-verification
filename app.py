@@ -1,60 +1,107 @@
 import gradio as gr
-from openai import OpenAI
 from typing import List, Dict, Tuple
 import json
-
-# 设置OpenAI API密钥
-# 请在环境变量中设置OPENAI_API_KEY，或者在这里直接设置
-# os.environ["OPENAI_API_KEY"] = "你的API密钥"
-# openai.api_key = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key="sk-38d0a50af05142da867feeb03eba9151", base_url="https://api.deepseek.com")
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import re
 
 # 定义三元组类型
 Triple = Tuple[str, str, str]
 
+model_path = "YOUR_MODEL_PATH_HERE"
+device = "cuda:0"
+
+
 class HallucinationVerifier:
     def __init__(self):
         """初始化幻觉验证器"""
-        # 可以在这里设置不同模型或系统提示
-        self.models = {
-            "agent1": "deepseek-chat",
-            "agent2": "deepseek-chat",
-            "agent3": "deepseek-chat"
-        }
-        
-    def call_llm(self, messages: List[Dict], model: str) -> str:
-        """调用OpenAI API获取回复"""
+
+        # 使用torch.bfloat16以更好的性能
+        print(f"正在加载模型 {model_path}...")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path, trust_remote_code=True
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map=device,
+            torch_dtype=torch.bfloat16,
+            # trust_remote_code=True
+        )
+
+        print(f"模型已加载到设备: {device}")
+
+    def call_llm(self, messages):
+        """使用本地模型生成回复"""
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.1,
-                max_tokens=500
+            system_prompt = ""
+            prompt = ""
+            for message in messages:
+                role = message["role"]
+                content = message["content"]
+                if role == "system":
+                    system_prompt = content
+                else:
+                    prompt = content
+
+            # 使用transformers生成回复
+            inputs = self.tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            ).to(device)
+
+            generate_ids = self.model.generate(
+                inputs,
+                max_new_tokens=800,  # 限制新生成token数量
+                do_sample=False,  # 关闭随机采样
+                eos_token_id=self.tokenizer.eos_token_id,  # 设置结束符
+                pad_token_id=self.tokenizer.pad_token_id,
+                temperature=0,  # 关闭随机性
             )
-            return response.choices[0].message.content
+
+            response = self.tokenizer.batch_decode(
+                generate_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0]
+
+            print(f"raw response: {response}")
+            return response
         except Exception as e:
-            return f"API调用错误: {str(e)}"
-    
-    def extract_json_from_markdown(self, text):
-        """从可能包含Markdown代码块的文本中提取JSON内容"""
-        import re
-        
-        # 尝试匹配Markdown代码块中的JSON
-        json_block_pattern = r"```(?:json)?\s*([\s\S]*?)```"
-        matches = re.findall(json_block_pattern, text)
-        
-        if matches:
-            # 返回第一个匹配的代码块内容
-            return matches[0].strip()
-        
-        # 如果没有匹配到代码块，返回原文本
-        return text.strip()
+            return f"模型调用错误: {str(e)}"
+
+    def extract_json_from_markdown(self, text: str):
+        """提取带markdown代码块标识的JSON"""
+        # 使用非捕获组处理可能的语法变体 (允许```json或```)
+        pattern = r"(?:```json?)?\n(.*?)\n```"
+
+        # 开启多行和点匹配模式
+        matches = re.findall(pattern, text, re.DOTALL | re.MULTILINE)
+
+        # 逆序检查所有匹配项
+        for candidate in reversed(matches):
+            try:
+                # 清理前后空格和换行
+                cleaned = candidate.strip()
+
+                # 验证JSON格式和必要字段
+                result = json.loads(cleaned)
+                return result
+            except Exception as e:
+                continue
+
+        # 添加容错机制：当无法提取时返回错误标识
+        return {"error": "JSON_NOT_FOUND"}
 
     def agent1_verify(self, triple: Triple) -> Dict:
         """第一个智能体：初步检查实体是否存在幻觉"""
         head, relation, tail = triple
-        
+
         system_prompt = """
         你是一个专门验证知识三元组的AI助手。你的任务是确定三元组中的实体是否是真实存在的，
         而不是评估关系的正确性。请检查头实体和尾实体是否都是真实世界中存在的概念或对象。
@@ -70,17 +117,21 @@ class HallucinationVerifier:
         
         请直接返回JSON格式，不要添加Markdown代码块或其他格式。
         """
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"请验证以下三元组中实体是否真实存在：({head}, {relation}, {tail})"}
+            {
+                "role": "user",
+                "content": f"请验证以下三元组中实体是否真实存在：({head}, {relation}, {tail})",
+            },
         ]
-        
-        response = self.call_llm(messages, self.models["agent1"])
+
+        response = self.call_llm(messages)
         try:
             # 先处理可能存在的Markdown格式
             json_content = self.extract_json_from_markdown(response)
-            return json.loads(json_content)
+            print(f"agent1's response: {json_content}")
+            return json_content
         except:
             # 如果返回的不是有效JSON，尝试格式化
             return {
@@ -88,13 +139,13 @@ class HallucinationVerifier:
                 "head_entity_reason": "解析错误",
                 "tail_entity_real": None,
                 "tail_entity_reason": "解析错误",
-                "analysis": response
+                "analysis": response,
             }
-    
+
     def agent2_verify(self, triple: Triple, agent1_result: Dict) -> Dict:
         """第二个智能体：基于第一个智能体的结果进行深度事实核查"""
         head, relation, tail = triple
-        
+
         system_prompt = """
         你是一个专门进行事实核查的AI助手。前一个智能体已经对三元组中的实体进行了初步验证，
         现在你需要对这个结果进行更深入的分析。特别关注可能的幻觉实体，并进行事实核查。
@@ -120,39 +171,52 @@ class HallucinationVerifier:
             "detailed_analysis": "详细分析"
         }
         """
-        
+
         # 将第一个智能体的结果格式化为字符串
         agent1_result_str = json.dumps(agent1_result, ensure_ascii=False, indent=2)
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""
+            {
+                "role": "user",
+                "content": f"""
             三元组: ({head}, {relation}, {tail})
             
             第一个智能体的验证结果:
             {agent1_result_str}
             
             请你进行更深入的事实核查，并给出你的判断。
-            """}
+            """,
+            },
         ]
-        
-        response = self.call_llm(messages, self.models["agent2"])
+
+        response = self.call_llm(messages)
         try:
             # 先处理可能存在的Markdown格式
             json_content = self.extract_json_from_markdown(response)
-            return json.loads(json_content)
+            return json_content
         except:
             return {
-                "head_entity_verification": {"is_real": None, "confidence": "低", "evidence": "解析错误"},
-                "tail_entity_verification": {"is_real": None, "confidence": "低", "evidence": "解析错误"},
+                "head_entity_verification": {
+                    "is_real": None,
+                    "confidence": "低",
+                    "evidence": "解析错误",
+                },
+                "tail_entity_verification": {
+                    "is_real": None,
+                    "confidence": "低",
+                    "evidence": "解析错误",
+                },
                 "relationship_validity": "无法确定",
-                "detailed_analysis": response
+                "detailed_analysis": response,
             }
-    
-    def agent3_verify(self, triple: Triple, agent1_result: Dict, agent2_result: Dict) -> Dict:
+
+    def agent3_verify(
+        self, triple: Triple, agent1_result: Dict, agent2_result: Dict
+    ) -> Dict:
         """第三个智能体：整合前两个智能体的结果，给出最终判断和修改建议"""
         head, relation, tail = triple
-        
+
         system_prompt = """
         你是一个决策者AI助手。两个前置智能体已经对三元组中的实体进行了验证和事实核查。
         现在，你需要整合这些信息，给出最终判断，并在必要时提供修改建议。
@@ -175,13 +239,15 @@ class HallucinationVerifier:
             "summary": "简短总结"
         }
         """
-        
+
         agent1_result_str = json.dumps(agent1_result, ensure_ascii=False, indent=2)
         agent2_result_str = json.dumps(agent2_result, ensure_ascii=False, indent=2)
-        
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""
+            {
+                "role": "user",
+                "content": f"""
             原始三元组: ({head}, {relation}, {tail})
             
             智能体1验证结果:
@@ -191,41 +257,43 @@ class HallucinationVerifier:
             {agent2_result_str}
             
             请整合以上信息，给出最终判断和修改建议。
-            """}
+            """,
+            },
         ]
-        
-        response = self.call_llm(messages, self.models["agent3"])
+
+        response = self.call_llm(messages)
         try:
             # 先处理可能存在的Markdown格式
             json_content = self.extract_json_from_markdown(response)
-            return json.loads(json_content)
+            return json_content
         except:
             return {
                 "final_judgment": {
                     "head_entity_hallucination": None,
                     "tail_entity_hallucination": None,
-                    "relationship_valid": None
+                    "relationship_valid": None,
                 },
                 "correction_suggestion": {
                     "corrected_triple": [head, relation, tail],
                     "confidence": "低",
-                    "explanation": "无法解析第三个智能体的结果"
+                    "explanation": "无法解析第三个智能体的结果",
                 },
                 "reasoning": "解析错误",
-                "summary": response
+                "summary": response,
             }
-    
+
     def full_verification(self, triple: Triple) -> Tuple[Dict, Dict, Dict]:
         """执行完整的三步验证流程"""
         agent1_result = self.agent1_verify(triple)
         agent2_result = self.agent2_verify(triple, agent1_result)
         agent3_result = self.agent3_verify(triple, agent1_result, agent2_result)
-        
+
         return agent1_result, agent2_result, agent3_result
+
 
 def create_gradio_interface():
     verifier = HallucinationVerifier()
-    
+
     # 自定义CSS样式
     custom_css = """
     .container {
@@ -336,58 +404,87 @@ def create_gradio_interface():
         animation: fadeIn 0.5s ease-in-out;
     }
     """
-    
+
     def process_verification(head_entity, relation, tail_entity):
         triple = (head_entity, relation, tail_entity)
         agent1_result, agent2_result, agent3_result = verifier.full_verification(triple)
-        
+
         # 美化JSON显示
         agent1_str = json.dumps(agent1_result, ensure_ascii=False, indent=2)
         agent2_str = json.dumps(agent2_result, ensure_ascii=False, indent=2)
         agent3_str = json.dumps(agent3_result, ensure_ascii=False, indent=2)
-        
+
         # 提取修正后的三元组
         try:
-            corrected_head = agent3_result["correction_suggestion"]["corrected_triple"][0]
-            corrected_relation = agent3_result["correction_suggestion"]["corrected_triple"][1]
-            corrected_tail = agent3_result["correction_suggestion"]["corrected_triple"][2]
+            corrected_head = agent3_result["correction_suggestion"]["corrected_triple"][
+                0
+            ]
+            corrected_relation = agent3_result["correction_suggestion"][
+                "corrected_triple"
+            ][1]
+            corrected_tail = agent3_result["correction_suggestion"]["corrected_triple"][
+                2
+            ]
         except:
             corrected_head = head_entity
             corrected_relation = relation
             corrected_tail = tail_entity
-        
+
         # 添加简单的延迟以显示加载效果
         import time
+
         time.sleep(0.5)
-        
-        return agent1_str, agent2_str, agent3_str, corrected_head, corrected_relation, corrected_tail
-    
+
+        return (
+            agent1_str,
+            agent2_str,
+            agent3_str,
+            corrected_head,
+            corrected_relation,
+            corrected_tail,
+        )
+
     # 创建一个加载指示动画的函数
     def show_loading():
         return ["处理中...", "处理中...", "处理中...", "", "", ""]
-    
-    with gr.Blocks(title="多智能体校验系统", css=custom_css, theme=gr.themes.Soft()) as demo:
+
+    with gr.Blocks(
+        title="多智能体校验系统", css=custom_css, theme=gr.themes.Soft()
+    ) as demo:
         with gr.Row(elem_classes="container"):
             with gr.Column():
                 gr.Markdown("# 多智能体校验系统", elem_classes="title")
-                gr.Markdown("输入一个三元组(头实体, 关系, 尾实体)，系统将使用多个智能体进行校验。", elem_classes="subtitle")
-                
+                gr.Markdown(
+                    "输入一个三元组(头实体, 关系, 尾实体)，系统将使用多个智能体进行校验。",
+                    elem_classes="subtitle",
+                )
+
                 with gr.Group(elem_classes="input-container fade-in"):
                     gr.Markdown(" ### 输入三元组")
                     with gr.Row():
-                        head_entity = gr.Textbox(label="头实体", placeholder="例如：爱因斯坦")
+                        head_entity = gr.Textbox(
+                            label="头实体", placeholder="例如：爱因斯坦"
+                        )
                         relation = gr.Textbox(label="关系", placeholder="例如：发明了")
-                        tail_entity = gr.Textbox(label="尾实体", placeholder="例如：相对论")
-                    
+                        tail_entity = gr.Textbox(
+                            label="尾实体", placeholder="例如：相对论"
+                        )
+
                     verify_button = gr.Button("开始校验", elem_classes="verify-button")
-                
+
                 with gr.Group(elem_classes="output-container fade-in"):
                     gr.Markdown(" ### 修正结果")
                     with gr.Row():
-                        corrected_head = gr.Textbox(label="修正后的头实体", elem_classes="result-highlight")
-                        corrected_relation = gr.Textbox(label="修正后的关系", elem_classes="result-highlight")
-                        corrected_tail = gr.Textbox(label="修正后的尾实体", elem_classes="result-highlight")
-                
+                        corrected_head = gr.Textbox(
+                            label="修正后的头实体", elem_classes="result-highlight"
+                        )
+                        corrected_relation = gr.Textbox(
+                            label="修正后的关系", elem_classes="result-highlight"
+                        )
+                        corrected_tail = gr.Textbox(
+                            label="修正后的尾实体", elem_classes="result-highlight"
+                        )
+
                 with gr.Accordion("校验过程详情", open=False, elem_classes="fade-in"):
                     with gr.Tab("智能体1: 初步验证"):
                         agent1_output = gr.JSON(elem_classes="agent-output")
@@ -395,7 +492,7 @@ def create_gradio_interface():
                         agent2_output = gr.JSON(elem_classes="agent-output")
                     with gr.Tab("智能体3: 最终判断"):
                         agent3_output = gr.JSON(elem_classes="agent-output")
-                
+
                 with gr.Accordion("使用说明", open=False, elem_classes="fade-in"):
                     gr.Markdown("""
                     ### 使用说明
@@ -417,32 +514,45 @@ def create_gradio_interface():
                     - 关系: "发明了"
                     - 尾实体: "蒸汽机"
                     """)
-        
+
         # 设置按钮点击事件，添加加载动画效果
         loading_event = verify_button.click(
             fn=show_loading,
-            outputs=[agent1_output, agent2_output, agent3_output, 
-                     corrected_head, corrected_relation, corrected_tail]
+            outputs=[
+                agent1_output,
+                agent2_output,
+                agent3_output,
+                corrected_head,
+                corrected_relation,
+                corrected_tail,
+            ],
         )
         loading_event.then(
             fn=process_verification,
             inputs=[head_entity, relation, tail_entity],
-            outputs=[agent1_output, agent2_output, agent3_output, 
-                     corrected_head, corrected_relation, corrected_tail]
+            outputs=[
+                agent1_output,
+                agent2_output,
+                agent3_output,
+                corrected_head,
+                corrected_relation,
+                corrected_tail,
+            ],
         )
-        
+
         # 添加示例
         gr.Examples(
             examples=[
                 ["爱因斯坦", "发明了", "相对论"],
                 ["拿破仑", "发明了", "蒸汽机"],
                 ["马云", "创立了", "阿里巴巴"],
-                ["关羽", "是", "三国演义的角色"]
+                ["关羽", "是", "三国演义的角色"],
             ],
-            inputs=[head_entity, relation, tail_entity]
+            inputs=[head_entity, relation, tail_entity],
         )
-    
+
     return demo
+
 
 if __name__ == "__main__":
     # 创建并启动Gradio界面
