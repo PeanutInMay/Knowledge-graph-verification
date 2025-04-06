@@ -2,6 +2,7 @@ import gradio as gr
 from openai import OpenAI
 from typing import List, Dict, Tuple
 import json
+import os
 
 # 设置OpenAI API密钥
 
@@ -241,116 +242,16 @@ class HallucinationVerifier:
 def create_gradio_interface():
     verifier = HallucinationVerifier()
 
-    # 自定义CSS样式
-    custom_css = """
-    .container {
-        max-width: 1000px;
-        margin: auto;
-    }
-    .title {
-        text-align: center;
-        color: #1a5276;
-        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-        font-size: 2.5em;
-        font-weight: bold;
-        margin-bottom: 12px;  /* 从25px减小到12px */
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        background: linear-gradient(to right, #2980b9, #3498db);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        padding: 10px 0 5px 0;  /* 减少底部内边距 */
-        border-bottom: 2px solid #e8f4fc;
-    }
-    .subtitle {
-        text-align: center;
-        color: #34495E;
-        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-        font-size: 1.1em;  /* 稍微减小字体 */
-        margin-bottom: 10px;  /* 从20px减小到10px */
-        font-style: italic;
-        letter-spacing: 0.5px;
-        line-height: 1.2;  /* 从1.4减小到1.2 */
-    }
-    .input-container, .output-container {
-        padding: 18px;
-        border-radius: 10px;
-        transition: all 0.3s ease;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
-        margin-bottom: 16px;
-        position: relative;
-        overflow: hidden;
-    }
-    .input-container {
-        background: linear-gradient(to bottom right, #f9fafc, #f4f7fa);
-        border: 1px solid #e1e8ed;
-    }
-    .input-container:before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 4px;
-        height: 100%;
-        background: linear-gradient(to bottom, #3498db, #2980b9);
-    }
-    .output-container {
-        background: linear-gradient(to bottom right, #f0f5fa, #e8f0f8);
-        border: 1px solid #d8e2ef;
-    }
-    .output-container:before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 4px;
-        height: 100%;
-        background: linear-gradient(to bottom, #27ae60, #1e8449);
-    }
-    .input-container:hover, .output-container:hover {
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        transform: translateY(-2px);
-    }
-    .input-container h3, .output-container h3 {
-        color: #2c3e50;
-        font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-        margin-bottom: 15px;
-        font-weight: 600;
-        padding-bottom: 8px;
-        border-bottom: 1px solid rgba(0,0,0,0.05);
-    }
-    .verify-button {
-        background-color: #3498db;
-        color: white;
-        border: none;
-        padding: 12px 20px;
-        border-radius: 5px;
-        font-weight: bold;
-        transition: all 0.3s ease;
-    }
-    .verify-button:hover {
-        background-color: #2980b9;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    }
-    .agent-output {
-        font-family: 'Consolas', 'Source Code Pro', monospace;
-        border-left: 3px solid #3498db;
-        padding-left: 10px;
-    }
-    .result-highlight {
-        background-color: #e8f4fc;
-        border-left: 3px solid #27ae60;
-        padding: 10px;
-        border-radius: 5px;
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
-    .fade-in {
-        animation: fadeIn 0.5s ease-in-out;
-    }
-    """
+    # 加载外部CSS文件
+    css_file_path = os.path.join(os.path.dirname(__file__), "static", "style.css")
+
+    try:
+        with open(css_file_path, "r", encoding="utf-8") as f:
+            custom_css = f.read()
+    except Exception as e:
+        print(f"无法加载CSS文件: {e}")
+        # 如果文件加载失败，使用默认的空CSS
+        custom_css = ""
 
     def process_verification(head_entity, relation, tail_entity):
         triple = (head_entity, relation, tail_entity)
